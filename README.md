@@ -15,7 +15,7 @@ MeetAnt 是一款基于 wxWidgets 构建的桌面会议助手应用，旨在提�
 
 ## 技术栈
 
-- **UI 框架**: wxWidgets 3.2+
+- **UI 框架**: wxWidgets 3.2+ (确保体积足够轻量、跨平台)
 - **构建系统**: CMake 3.15+
 - **音频处理**: portaudio
 - **语音识别**: FunASR (本地/云端)
@@ -24,6 +24,18 @@ MeetAnt 是一款基于 wxWidgets 构建的桌面会议助手应用，旨在提�
 
 详细构建步骤将在后续补充。
 需要确保已安装 CMake, C++ 编译器, 以及 wxWidgets 开发库。
+
+## Screenshots
+![image](https://github.com/user-attachments/assets/e53b719c-42a6-4d5e-b655-490723307b17)
+![image](https://github.com/user-attachments/assets/d374bc5c-6acc-4f2a-b4b6-ba29fce85327)
+![image](https://github.com/user-attachments/assets/7675fe17-5455-496a-b183-3379114217cc)
+![image](https://github.com/user-attachments/assets/7596f7fe-31c6-4f92-8929-ca345058b3e9)
+![image](https://github.com/user-attachments/assets/0b833e45-571f-4cab-b5ae-8ed0e12567c2)
+
+
+
+
+
 
 ## 快速开始
 
