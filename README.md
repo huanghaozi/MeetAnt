@@ -1,4 +1,4 @@
-# MeetAnt 会议助手
+# MeetAnt 会议助手（施工中）
 
 MeetAnt 是一款基于 wxWidgets 构建的桌面会议助手应用，旨在提供录音、实时转录、AI 交互等功能。
 
