@@ -1,0 +1,11 @@
+{
+  "name": "meetant",
+  "version": "1.0.0",
+  "description": "MeetAnt application with wxWidgets, PortAudio and CURL",
+  "dependencies": [
+    "wxwidgets",
+    "portaudio",
+    "curl",
+    "nlohmann-json"
+  ]
+} 
