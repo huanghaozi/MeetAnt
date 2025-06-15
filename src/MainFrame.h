@@ -30,6 +30,8 @@
 #include <portaudio.h>
 #include <nlohmann/json.hpp>
 #include "SSEClient.h"
+#include "TranscriptionBubbleCtrl.h"  // 添加新控件头文件
+#include "PlaybackControlBar.h"       // 添加播放控制条头文件
 
 #ifdef _WIN32
 #include <windows.h>
@@ -39,6 +41,11 @@
 
 // 向前声明我们的自定义任务栏图标类
 class AppTaskBarIcon;
+
+// 前向声明
+class wxRichTextCtrl;
+class TranscriptionBubbleCtrl;  // 添加新控件的前向声明
+class wxSearchCtrl;
 
 // 为任务栏菜单定义一些ID
 enum {
@@ -76,6 +83,7 @@ enum {
     ID_Menu_Remove_Session,
     ID_Menu_Add_Existing_Session,
     ID_Menu_Export,
+    ID_Menu_Search,  // 添加搜索菜单ID
     // 新增右键菜单ID
     ID_SessionTreeContext_Remove,
     // 新增导航栏标签页ID
@@ -86,7 +94,11 @@ enum {
     ID_VolumeUpdate,
     ID_ASRResult,
     ID_AnnotationTree, // 新增: 批注树控件ID
-    ID_TranscriptionTextCtrl // 新增: 转录文本控件ID，用于捕获滚动事件
+    ID_TranscriptionTextCtrl, // 新增: 转录文本控件ID，用于捕获滚动事件
+    ID_Context_AddNote,
+    ID_Context_Highlight,
+    ID_Context_SetSpeaker,
+    ID_Context_Copy
 };
 
 // 定义会话数据结构
@@ -145,18 +157,18 @@ public:
     void OnSearchCancel(wxCommandEvent& event); // 新增：搜索取消事件处理
     void OnHighlight(wxCommandEvent& event);
     void OnBookmark(wxCommandEvent& event);
-    void OnAddNote(wxCommandEvent& event);  // 新增：添加批注
-    void OnClearFormatting(wxCommandEvent& event);
+    // void OnAddNote(wxCommandEvent& event);  // 新增：添加批注
+    // void OnClearFormatting(wxCommandEvent& event);
     void OnLabelSpeaker(wxCommandEvent& event);
     void OnBookmarkSelected(wxTreeEvent& event);  // 新增：选择书签事件
-    void OnAnnotationSelected(wxTreeEvent& event); // 新增: 批注树选择事件
+    // void OnAnnotationSelected(wxTreeEvent& event); // 新增: 批注树选择事件
     
     // 新增：会话树右键菜单
     void OnSessionTreeContextMenu(wxTreeEvent& event);
     
     // 文件操作
     void OnSaveSession(wxCommandEvent& event);
-    void OnExport(wxCommandEvent& event);
+    // void OnExport(wxCommandEvent& event);
     void OnExportText(wxCommandEvent& event);
     void OnExportJSON(wxCommandEvent& event);
     void OnExportAudio(wxCommandEvent& event);
@@ -175,7 +187,7 @@ public:
     void UpdateTaskBarIconState();
 
     // 新增：更新发言人列表
-    void UpdateSpeakerList();
+    // void UpdateSpeakerList();
 
     // 音频输入处理
     bool InitializeAudioInput();
@@ -191,18 +203,36 @@ public:
 
     void JumpToTimestamp(MeetAnt::TimeStamp timestamp);
     void UpdateBookmarksTree();
-    void PopulateAnnotationTree(); // 新增: 填充批注树
+    // void PopulateAnnotationTree(); // 新增: 填充批注树
 
     void ToggleAnnotationsDisplay(); // 新增：切换批注显示
     void SyncAnnotationScrollPosition(wxScrollWinEvent& event); // 新增：同步批注滚动位置
     void RefreshAnnotations(); // 新增：刷新批注显示
+
+    // 转录消息相关
+    int m_selectedTranscriptionMessageId;  // 当前选中的转录消息ID
+    
+    // 转录消息事件处理
+    void OnTranscriptionMessageClicked(wxCommandEvent& event);
+    void OnTranscriptionMessageRightClicked(wxCommandEvent& event);
+    
+    // 播放控制事件处理
+    void OnPlaybackPositionChanged(wxCommandEvent& event);
+    void OnPlaybackStateChanged(wxCommandEvent& event);
+
+    // UI控件
+    wxTreeCtrl* m_sessionTree;        // 会话树控件
+    // wxRichTextCtrl* m_transcriptionTextCtrl;  // 主文本编辑器 - 已弃用
+    TranscriptionBubbleCtrl* m_transcriptionBubbleCtrl;  // 新的气泡显示控件
+    PlaybackControlBar* m_playbackControlBar;            // 播放控制条
+    wxRichTextCtrl* m_annotationTextCtrl;  // 批注区文本控件
 
 private:
     void CreateMenuBar();
     void CreateToolBar();
     void LoadSessions();
     void AddSessionToTree(const wxString& name, const wxString& path, const wxDateTime& creationTime, bool isActive = false);
-    void CreateNewSession(const wxString& name);
+    // void CreateNewSession(const wxString& name);
     void SaveCurrentSession();
     wxString CreateSessionDirectory(const wxString& sessionName);
     wxString GetSessionsDirectory() const;
@@ -219,6 +249,9 @@ private:
     // 新增：刷新会话树
     void RefreshSessionTree();
     
+    // 新增：添加测试转录数据
+    void AddTestTranscriptionData();
+    
     // UI 元素
     wxSplitterWindow* m_mainSplitter;       // 用于左右分割 (导航栏 vs 编辑器+批注栏+AI侧边栏)
     wxSplitterWindow* m_rightSplitter;      // 用于右侧分割 (编辑器+批注栏 vs AI侧边栏)
@@ -232,17 +265,14 @@ private:
     // 导航栏元素
     wxButton* m_recordButton;            // 录制按钮
     wxNotebook* m_navNotebook;           // 导航栏标签页
-    wxTreeCtrl* m_sessionTree;           // 会话历史树
     wxTreeCtrl* m_bookmarkTree;          // 书签树
     wxSearchCtrl* m_searchCtrl;          // 搜索控件
     wxButton* m_createSessionButton;     // 创建会话按钮
     
     // 主编辑器元素
-    wxRichTextCtrl* m_transcriptionTextCtrl; // 用于显示转录文本 (使用富文本控件)
     wxToolBar* m_editorToolbar;            // 编辑器工具栏
     
     // 批注元素 - 修改为新的版式
-    wxRichTextCtrl* m_annotationTextCtrl;   // 新增：批注右侧面板富文本控件
     bool m_showAnnotations;                 // 新增：是否显示批注
     std::map<long, MeetAnt::Annotation*> m_textPositionAnnotations; // 新增：文本位置与批注的映射
     
@@ -305,6 +335,9 @@ private:
     int m_actualSampleRate;            // 实际采样率
     int m_actualChannels;              // 实际声道数
     int m_actualBitsPerSample;         // 实际位深度
+    
+    // 录音开始时间
+    wxDateTime m_recordingStartTime;   // 录音开始时间戳
     
 #ifdef _WIN32
     // Windows WASAPI 直接录制相关

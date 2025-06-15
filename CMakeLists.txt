@@ -101,6 +101,10 @@ if(WIN32)
         src/NotePopup.cpp
         src/SSEClient.cpp
         src/meetant.rc
+        src/TranscriptionBubbleCtrl.cpp
+        src/TranscriptionBubbleCtrl.h
+        src/PlaybackControlBar.cpp
+        src/PlaybackControlBar.h
     )
 else()
     # 非 Windows 平台，不使用 WIN32 属性，也不编译 .rc
@@ -120,6 +124,10 @@ else()
         src/BookmarkDialog.h
         src/NotePopup.cpp
         src/SSEClient.cpp
+        src/TranscriptionBubbleCtrl.cpp
+        src/TranscriptionBubbleCtrl.h
+        src/PlaybackControlBar.cpp
+        src/PlaybackControlBar.h
     )
 endif()
 

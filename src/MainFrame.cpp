@@ -2,6 +2,7 @@
 #include "ConfigDialog.h"
 #include "BookmarkDialog.h"
 #include "NoteDialog.h"
+#include "TranscriptionBubbleCtrl.h"  // 添加新控件头文件
 #include <wx/sizer.h>
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
@@ -423,8 +424,8 @@ void AppTaskBarIcon::OnMenuToggleRecord(wxCommandEvent& WXUNUSED(event)){
 
 // --- MainFrame 事件表 ---
 wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
-    EVT_MENU(wxID_EXIT,  MainFrame::OnExit)
-    EVT_MENU(wxID_ABOUT, MainFrame::OnAbout)
+    // EVT_MENU(wxID_EXIT,  MainFrame::OnExit)
+    // EVT_MENU(wxID_ABOUT, MainFrame::OnAbout)
     EVT_MENU(ID_Menu_Settings, MainFrame::OnShowConfigDialog)
     EVT_MENU(ID_Menu_New_Session, MainFrame::OnCreateSession)
     EVT_MENU(ID_Menu_Save_Session, MainFrame::OnSaveSession)
@@ -444,13 +445,13 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_TOOL(ID_Toolbar_Highlight_Blue, MainFrame::OnHighlight)
     EVT_TOOL(ID_Toolbar_Highlight_Red, MainFrame::OnHighlight)
     EVT_TOOL(ID_Toolbar_Bookmark, MainFrame::OnBookmark)
-    EVT_TOOL(ID_Toolbar_Note, MainFrame::OnAddNote)
-    EVT_TOOL(ID_Toolbar_Clear, MainFrame::OnClearFormatting)
+    // EVT_TOOL(ID_Toolbar_Note, MainFrame::OnAddNote)
+    // EVT_TOOL(ID_Toolbar_Clear, MainFrame::OnClearFormatting)
     EVT_MENU(ID_LabelSpeaker, MainFrame::OnLabelSpeaker)
     EVT_TEXT_ENTER(wxID_ANY, MainFrame::OnSearch)
     EVT_SEARCHCTRL_SEARCH_BTN(wxID_ANY, MainFrame::OnSearch)
     EVT_SEARCHCTRL_CANCEL_BTN(wxID_ANY, MainFrame::OnSearchCancel)
-    EVT_TREE_SEL_CHANGED(ID_AnnotationTree, MainFrame::OnAnnotationSelected)
+    // EVT_TREE_SEL_CHANGED(ID_AnnotationTree, MainFrame::OnAnnotationSelected)
     EVT_TREE_ITEM_RIGHT_CLICK(ID_SessionTree, MainFrame::OnSessionTreeContextMenu)
     EVT_TIMER(wxID_ANY, MainFrame::OnAudioSaveTimer)
 wxEND_EVENT_TABLE()
@@ -470,6 +471,8 @@ MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& si
       m_audioFormat(AudioFormat::MP3_192), m_lameEncoder(nullptr), m_isMP3Format(true), m_mp3Bitrate(192),
       // 实际音频格式参数初始化
       m_actualSampleRate(48000), m_actualChannels(1), m_actualBitsPerSample(16),
+      // 录音开始时间初始化
+      m_recordingStartTime(wxDateTime::Now()),
       // AI相关成员变量初始化
       m_aiConfig(nullptr), m_aiRequest(nullptr), m_aiResponse(nullptr), m_aiResponseText(wxEmptyString),
       m_currentAIResponse(wxEmptyString), m_accumulatedSSEData(wxEmptyString), m_streamingBuffer(wxEmptyString),
@@ -573,35 +576,70 @@ MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& si
     m_editorPanel->SetBackgroundColour(wxColour(255, 255, 255));
     wxBoxSizer* editorSizer = new wxBoxSizer(wxVERTICAL);
     
-    // 主文本编辑器
-    m_transcriptionTextCtrl = new wxRichTextCtrl(m_editorPanel, ID_TranscriptionTextCtrl, wxEmptyString, 
-                                               wxDefaultPosition, wxDefaultSize, 
-                                               wxRE_MULTILINE | wxBORDER_NONE);
-    editorSizer->Add(m_transcriptionTextCtrl, 1, wxEXPAND | wxALL, 0);
+    // 添加播放控制条
+    m_playbackControlBar = new PlaybackControlBar(m_editorPanel, wxID_ANY);
+    m_playbackControlBar->SetMinSize(wxSize(-1, 100));
+    editorSizer->Add(m_playbackControlBar, 0, wxEXPAND | wxALL, 5);
+    
+    // 主文本编辑器 - 使用新的气泡控件
+    m_transcriptionBubbleCtrl = new TranscriptionBubbleCtrl(m_editorPanel, ID_TranscriptionTextCtrl);
+    editorSizer->Add(m_transcriptionBubbleCtrl, 1, wxEXPAND | wxALL, 0);
     m_editorPanel->SetSizer(editorSizer);
+    
+    // 绑定播放控制条事件
+    Bind(wxEVT_PLAYBACK_POSITION_CHANGED, &MainFrame::OnPlaybackPositionChanged, this);
+    Bind(wxEVT_PLAYBACK_STATE_CHANGED, &MainFrame::OnPlaybackStateChanged, this);
+    
+    // 绑定气泡控件事件
+    Bind(wxEVT_TRANSCRIPTION_MESSAGE_CLICKED, &MainFrame::OnTranscriptionMessageClicked, this);
+    Bind(wxEVT_TRANSCRIPTION_MESSAGE_RIGHT_CLICKED, &MainFrame::OnTranscriptionMessageRightClicked, this);
 
     // --- 创建批注面板 ---
     m_annotationPanel = new wxPanel(m_editorAnnotationSplitter, wxID_ANY);
-    m_annotationPanel->SetBackgroundColour(wxColour(255, 252, 245)); // 浅黄色背景，区分于主编辑区
+    m_annotationPanel->SetBackgroundColour(wxColour(255, 248, 220)); // 浅黄色背景，更像便签纸
     wxBoxSizer* annotationSizer = new wxBoxSizer(wxVERTICAL);
+    
+    // 添加标题面板
+    wxPanel* annotationTitlePanel = new wxPanel(m_annotationPanel, wxID_ANY);
+    annotationTitlePanel->SetBackgroundColour(wxColour(255, 235, 180)); // 更深的黄色作为标题背景
+    wxBoxSizer* titleSizer = new wxBoxSizer(wxHORIZONTAL);
+    
+    // 标题文本
+    wxStaticText* annotationTitle = new wxStaticText(annotationTitlePanel, wxID_ANY, wxT("划线批注便利贴"));
+    annotationTitle->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+    annotationTitle->SetForegroundColour(wxColour(100, 80, 20));
+    titleSizer->Add(annotationTitle, 1, wxALL | wxALIGN_CENTER_VERTICAL, 10);
+    
+    annotationTitlePanel->SetSizer(titleSizer);
+    annotationSizer->Add(annotationTitlePanel, 0, wxEXPAND);
+    
+    // 添加提示文本
+    wxStaticText* annotationHint = new wxStaticText(m_annotationPanel, wxID_ANY, 
+        wxT("鼠标移动到划线文字上显示"));
+    annotationHint->SetFont(wxFont(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_ITALIC, wxFONTWEIGHT_NORMAL));
+    annotationHint->SetForegroundColour(wxColour(120, 100, 40));
+    annotationSizer->Add(annotationHint, 0, wxALL, 10);
     
     // 批注区文本控件
     m_annotationTextCtrl = new wxRichTextCtrl(m_annotationPanel, wxID_ANY, wxEmptyString, 
                                             wxDefaultPosition, wxDefaultSize, 
                                             wxRE_MULTILINE | wxRE_READONLY | wxBORDER_NONE);
-    m_annotationTextCtrl->SetBackgroundColour(wxColour(255, 252, 245)); // 保持和Panel一致的背景色
+    m_annotationTextCtrl->SetBackgroundColour(wxColour(255, 248, 220)); // 保持和Panel一致的背景色
     
     // 设置批注区样式
     wxRichTextAttr annotationStyle;
     annotationStyle.SetAlignment(wxTEXT_ALIGNMENT_LEFT);
     annotationStyle.SetFontSize(10); // 稍小的字体
-    annotationStyle.SetFontStyle(wxFONTSTYLE_ITALIC);
-    annotationStyle.SetTextColour(wxColour(100, 100, 100)); // 深灰色字体
+    annotationStyle.SetFontStyle(wxFONTSTYLE_NORMAL);
+    annotationStyle.SetTextColour(wxColour(80, 60, 20)); // 深棕色字体
     m_annotationTextCtrl->SetDefaultStyle(annotationStyle);
+    
+    // 添加一些示例批注内容
+    m_annotationTextCtrl->AppendText(wxT("微信用户1748349252\n\n"));
     
     // 不再使用Connect或Bind方法，而是在事件表中处理滚动事件
     
-    annotationSizer->Add(m_annotationTextCtrl, 1, wxEXPAND | wxALL, 0);
+    annotationSizer->Add(m_annotationTextCtrl, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
     m_annotationPanel->SetSizer(annotationSizer);
     
     // 设置编辑器和批注区的分割
@@ -695,25 +733,40 @@ MainFrame::MainFrame(const wxString& title, const wxPoint& pos, const wxSize& si
             wxTreeItemId newItemId = m_sessionTree->AppendItem(rootId, sessionName);
             m_sessionTree->SelectItem(newItemId);
             
-            SetStatusText(wxT("已创建默认会话"));
+            SetStatusText(wxString::Format(wxT("已创建默认会话: %s"), sessionName));
         }
     }
+    
+    // 添加测试对话数据
+    AddTestTranscriptionData();
     
     // 初始化PortAudio
     InitializePortAudio();
     
     // 加载音频配置
-    LoadAudioConfig();
+    try {
+        LoadAudioConfig();
+    } catch (...) {
+        wxLogWarning(wxT("音频配置加载失败，使用默认设置"));
+    }
     
     // 加载音频格式配置
-    LoadAudioFormatConfig();
+    try {
+        LoadAudioFormatConfig();
+    } catch (...) {
+        wxLogWarning(wxT("音频格式配置加载失败，使用默认设置"));
+    }
     
     // 初始化音频保存相关组件
     m_audioDataBuffer.reserve(AUDIO_BUFFER_FRAMES);
     m_audioSaveTimer = new wxTimer(this);
     
     // 加载AI配置
-    LoadAIConfig();
+    try {
+        LoadAIConfig();
+    } catch (...) {
+        wxLogWarning(wxT("AI配置加载失败，使用默认设置"));
+    }
     
     // 绑定AI相关事件
     this->Bind(wxEVT_WEBREQUEST_STATE, &MainFrame::OnAIWebRequestStateChanged, this);
@@ -819,37 +872,67 @@ void MainFrame::CreateMenuBar() {
 void MainFrame::CreateToolBar() {
     m_editorToolbar = new wxToolBar(m_editorPanel, wxID_ANY);
     
-    // 添加高亮工具按钮
-    wxBitmap yellowHighlight(wxArtProvider::GetBitmap(wxART_FIND, wxART_TOOLBAR, wxSize(16, 16)));
+    // 添加功能标签
+    wxStaticText* toolLabel = new wxStaticText(m_editorToolbar, wxID_ANY, wxT("划线批注："));
+    m_editorToolbar->AddControl(toolLabel);
+    
+    // 添加高亮工具按钮 - 使用更安全的图标加载
+    wxBitmap defaultIcon = wxArtProvider::GetBitmap(wxART_INFORMATION, wxART_TOOLBAR, wxSize(16, 16));
+    
+    wxBitmap yellowHighlight = wxArtProvider::GetBitmap(wxART_FIND, wxART_TOOLBAR, wxSize(16, 16));
+    if (!yellowHighlight.IsOk()) yellowHighlight = defaultIcon;
     m_editorToolbar->AddTool(ID_Toolbar_Highlight_Yellow, wxT("黄色高亮"), yellowHighlight, wxT("黄色高亮所选文本"));
     
-    wxBitmap greenHighlight(wxArtProvider::GetBitmap(wxART_FIND, wxART_TOOLBAR, wxSize(16, 16)));
+    wxBitmap greenHighlight = wxArtProvider::GetBitmap(wxART_FIND, wxART_TOOLBAR, wxSize(16, 16));
+    if (!greenHighlight.IsOk()) greenHighlight = defaultIcon;
     m_editorToolbar->AddTool(ID_Toolbar_Highlight_Green, wxT("绿色高亮"), greenHighlight, wxT("绿色高亮所选文本"));
     
-    wxBitmap blueHighlight(wxArtProvider::GetBitmap(wxART_FIND, wxART_TOOLBAR, wxSize(16, 16)));
+    wxBitmap blueHighlight = wxArtProvider::GetBitmap(wxART_FIND, wxART_TOOLBAR, wxSize(16, 16));
+    if (!blueHighlight.IsOk()) blueHighlight = defaultIcon;
     m_editorToolbar->AddTool(ID_Toolbar_Highlight_Blue, wxT("蓝色高亮"), blueHighlight, wxT("蓝色高亮所选文本"));
     
-    wxBitmap redHighlight(wxArtProvider::GetBitmap(wxART_FIND, wxART_TOOLBAR, wxSize(16, 16)));
+    wxBitmap redHighlight = wxArtProvider::GetBitmap(wxART_FIND, wxART_TOOLBAR, wxSize(16, 16));
+    if (!redHighlight.IsOk()) redHighlight = defaultIcon;
     m_editorToolbar->AddTool(ID_Toolbar_Highlight_Red, wxT("红色高亮"), redHighlight, wxT("红色高亮所选文本"));
     
     m_editorToolbar->AddSeparator();
     
+    // 添加其他标注功能
+    wxStaticText* annotationLabel = new wxStaticText(m_editorToolbar, wxID_ANY, wxT("其他功能："));
+    m_editorToolbar->AddControl(annotationLabel);
+    
     // 添加书签按钮
-    wxBitmap bookmarkBitmap(wxArtProvider::GetBitmap(wxART_ADD_BOOKMARK, wxART_TOOLBAR, wxSize(16, 16)));
+    wxBitmap bookmarkBitmap = wxArtProvider::GetBitmap(wxART_ADD_BOOKMARK, wxART_TOOLBAR, wxSize(16, 16));
+    if (!bookmarkBitmap.IsOk()) bookmarkBitmap = defaultIcon;
     m_editorToolbar->AddTool(ID_Toolbar_Bookmark, wxT("添加书签"), bookmarkBitmap, wxT("在当前位置添加书签"));
     
     // 添加批注按钮
-    wxBitmap noteBitmap(wxArtProvider::GetBitmap(wxART_INFORMATION, wxART_TOOLBAR, wxSize(16, 16)));
+    wxBitmap noteBitmap = wxArtProvider::GetBitmap(wxART_INFORMATION, wxART_TOOLBAR, wxSize(16, 16));
+    if (!noteBitmap.IsOk()) noteBitmap = defaultIcon;
     m_editorToolbar->AddTool(ID_Toolbar_Note, wxT("添加批注"), noteBitmap, wxT("为所选文本添加批注"));
     
     m_editorToolbar->AddSeparator();
     
+    // 添加导出功能
+    wxBitmap exportBitmap = wxArtProvider::GetBitmap(wxART_FILE_SAVE, wxART_TOOLBAR, wxSize(16, 16));
+    if (!exportBitmap.IsOk()) exportBitmap = defaultIcon;
+    m_editorToolbar->AddTool(ID_Export_Text, wxT("导出"), exportBitmap, wxT("导出会议记录"));
+    
+    // 添加搜索功能
+    wxBitmap searchBitmap = wxArtProvider::GetBitmap(wxART_FIND, wxART_TOOLBAR, wxSize(16, 16));
+    if (!searchBitmap.IsOk()) searchBitmap = defaultIcon;
+    m_editorToolbar->AddTool(ID_Menu_Search, wxT("搜索"), searchBitmap, wxT("搜索会议内容"));
+    
+    m_editorToolbar->AddSeparator();
+    
     // 添加清除格式按钮
-    wxBitmap clearBitmap(wxArtProvider::GetBitmap(wxART_DELETE, wxART_TOOLBAR, wxSize(16, 16)));
+    wxBitmap clearBitmap = wxArtProvider::GetBitmap(wxART_DELETE, wxART_TOOLBAR, wxSize(16, 16));
+    if (!clearBitmap.IsOk()) clearBitmap = defaultIcon;
     m_editorToolbar->AddTool(ID_Toolbar_Clear, wxT("清除格式"), clearBitmap, wxT("清除选中区域的格式"));
     
     // 添加切换批注显示按钮 - 使用wxITEM_CHECK类型使其可切换
-    wxBitmap toggleAnnotationsBitmap(wxArtProvider::GetBitmap(wxART_LIST_VIEW, wxART_TOOLBAR, wxSize(16, 16)));
+    wxBitmap toggleAnnotationsBitmap = wxArtProvider::GetBitmap(wxART_LIST_VIEW, wxART_TOOLBAR, wxSize(16, 16));
+    if (!toggleAnnotationsBitmap.IsOk()) toggleAnnotationsBitmap = defaultIcon;
     m_editorToolbar->AddTool(ID_Toolbar_Toggle_Annotations, wxT("切换批注显示"), 
                            toggleAnnotationsBitmap, wxT("显示/隐藏批注面板"), 
                            wxITEM_CHECK);
@@ -880,15 +963,15 @@ void MainFrame::InitAnnotationManager() {
     m_annotationManager = std::make_unique<MeetAnt::AnnotationManager>();
     
     // 动态绑定滚动事件
-    m_transcriptionTextCtrl->Bind(wxEVT_SCROLLWIN_THUMBTRACK, 
+    m_transcriptionBubbleCtrl->Bind(wxEVT_SCROLLWIN_THUMBTRACK, 
                                 [this](wxScrollWinEvent& event){ 
                                     this->SyncAnnotationScrollPosition(event); 
                                 });
-    m_transcriptionTextCtrl->Bind(wxEVT_SCROLLWIN_LINEUP, 
+    m_transcriptionBubbleCtrl->Bind(wxEVT_SCROLLWIN_LINEUP, 
                                 [this](wxScrollWinEvent& event){ 
                                     this->SyncAnnotationScrollPosition(event); 
                                 });
-    m_transcriptionTextCtrl->Bind(wxEVT_SCROLLWIN_LINEDOWN, 
+    m_transcriptionBubbleCtrl->Bind(wxEVT_SCROLLWIN_LINEDOWN, 
                                 [this](wxScrollWinEvent& event){ 
                                     this->SyncAnnotationScrollPosition(event); 
                                 });
@@ -994,36 +1077,32 @@ void MainFrame::CreateNote(const wxString& title, const wxString& content, MeetA
 }
 
 void MainFrame::ApplyHighlight(const wxColour& color) {
-    // 获取选中文本
-    wxRichTextRange range = m_transcriptionTextCtrl->GetSelectionRange();
-    if (range.GetStart() == range.GetEnd()) {
-        wxMessageBox(wxT("请先选择要高亮的文本"), wxT("提示"), wxICON_INFORMATION, this);
-        return;
-    }
-    
-    // 应用高亮 - 修改为适当的方法
-    wxRichTextAttr attr;
-    attr.SetTextColour(color);
-    attr.SetBackgroundColour(color.ChangeLightness(180));
-    attr.SetFontWeight(wxFONTWEIGHT_BOLD);
-    
-    m_transcriptionTextCtrl->SetStyle(range, attr);
-    
-    // 获取选中文本内容
-    wxString selectedText = m_transcriptionTextCtrl->GetStringSelection();
-    
-    // 获取当前光标位置作为时间戳（实际应用中应该是真实的音频时间戳）
-    MeetAnt::TimeStamp timestamp = 0; // 这里仅为示例，应使用实际时间戳
-    
-    // 创建高亮批注并加入管理器
-    if (!m_currentSessionId.IsEmpty()) {
-        auto highlight = std::make_unique<MeetAnt::HighlightAnnotation>(
-            m_currentSessionId, timestamp, selectedText, color);
+    // 获取选中的消息（如果有）
+    if (m_selectedTranscriptionMessageId > 0) {
+        m_transcriptionBubbleCtrl->HighlightMessage(m_selectedTranscriptionMessageId, true);
         
-        m_annotationManager->AddAnnotation(std::move(highlight));
-        
-        // 保存批注
-        m_annotationManager->SaveAnnotations(m_currentSessionPath);
+        // 获取消息内容用于创建高亮批注
+        const auto& messages = m_transcriptionBubbleCtrl->GetMessages();
+        for (const auto& msg : messages) {
+            if (msg.messageId == m_selectedTranscriptionMessageId) {
+                // 获取当前时间戳
+                MeetAnt::TimeStamp timestamp = msg.timestamp.GetTicks() * 1000; // 转换为毫秒
+                
+                // 创建高亮批注并加入管理器
+                if (!m_currentSessionId.IsEmpty()) {
+                    auto highlight = std::make_unique<MeetAnt::HighlightAnnotation>(
+                        m_currentSessionId, timestamp, msg.content, color);
+                    
+                    m_annotationManager->AddAnnotation(std::move(highlight));
+                    
+                    // 保存批注
+                    m_annotationManager->SaveAnnotations(m_currentSessionPath);
+                }
+                break;
+            }
+        }
+    } else {
+        wxMessageBox(wxT("请先选择要高亮的消息"), wxT("提示"), wxICON_INFORMATION, this);
     }
 }
 
@@ -1126,399 +1205,26 @@ void MainFrame::OnBookmark(wxCommandEvent& event) {
         }
     }
 
-    long caretPos = m_transcriptionTextCtrl->GetInsertionPoint();
-    MeetAnt::TimeStamp currentTime = static_cast<MeetAnt::TimeStamp>(caretPos) * 100; // Placeholder timestamp
+    // 使用当前时间作为时间戳，或者如果有选中的消息，使用该消息的时间戳
+    MeetAnt::TimeStamp currentTime;
+    if (m_selectedTranscriptionMessageId > 0) {
+        // 查找选中消息的时间戳
+        const auto& messages = m_transcriptionBubbleCtrl->GetMessages();
+        for (const auto& msg : messages) {
+            if (msg.messageId == m_selectedTranscriptionMessageId) {
+                currentTime = msg.timestamp.GetTicks() * 1000; // 转换为毫秒
+                break;
+            }
+        }
+    } else {
+        // 使用当前时间
+        wxDateTime now = wxDateTime::Now();
+        currentTime = now.GetTicks() * 1000; // 转换为毫秒
+    }
 
     MeetAnt::BookmarkDialog dlg(this, wxT("添加书签"));
     if (dlg.ShowModal() == wxID_OK) {
         wxString label = dlg.GetBookmarkLabel();
-        wxString description = dlg.GetBookmarkDescription();
-
-        auto bookmark = std::make_unique<MeetAnt::BookmarkAnnotation>(
-            m_currentSessionId, 
-            currentTime, 
-            description, // Store description in content field
-            label
-        );
-        m_annotationManager->AddAnnotation(std::move(bookmark));
-        m_annotationManager->SaveAnnotations(m_currentSessionPath); // Immediately save
-        PopulateAnnotationTree(); // Refresh the main annotation tree
-        UpdateBookmarksTree();    // Refresh the bookmark tree in the nav panel
-    }
-}
-
-void MainFrame::OnAddNote(wxCommandEvent& event) {
-    // 检查是否有活跃会话，如果没有则自动创建一个默认会话
-    if (m_currentSessionId.IsEmpty() || !m_annotationManager) {
-        // 提示用户将创建默认会话
-        wxMessageDialog dlg(this, wxT("需要一个活跃的会话来添加批注。\n是否创建一个默认会话？"), 
-                         wxT("创建默认会话"), wxYES_NO | wxICON_QUESTION);
-        if (dlg.ShowModal() == wxID_YES) {
-            // 创建默认会话
-            wxDateTime now = wxDateTime::Now();
-            wxString sessionName = wxString::Format(wxT("默认会话-%s"), now.Format(wxT("%Y%m%d-%H%M%S")));
-            
-            // 创建会话目录
-            wxString sessionPath = CreateSessionDirectory(sessionName);
-            if (!sessionPath.IsEmpty()) {
-                m_currentSessionPath = sessionPath;
-                m_currentSessionId = sessionName;
-                
-                // 确保批注管理器已初始化
-                if (!m_annotationManager) {
-                    InitAnnotationManager();
-                }
-                
-                // 更新状态栏
-                SetStatusText(wxString::Format(wxT("已创建默认会话: %s"), sessionName));
-                
-                // 可以选择将新会话添加到会话树中
-                wxTreeItemId rootId = m_sessionTree->GetRootItem();
-                wxTreeItemId newItemId = m_sessionTree->AppendItem(rootId, sessionName);
-                m_sessionTree->SelectItem(newItemId);
-            } else {
-                wxMessageBox(wxT("无法创建会话目录"), wxT("错误"), wxICON_ERROR | wxOK, this);
-                return;
-            }
-        } else {
-            // 用户取消，不继续
-            return;
-        }
-    }
-    
-    // 获取选中文本
-    long selStart, selEnd;
-    wxRichTextRange range = m_transcriptionTextCtrl->GetSelectionRange();
-    selStart = range.GetStart();
-    selEnd = range.GetEnd();
-    
-    if (selStart == selEnd) {
-        wxMessageBox(wxT("请先选择要添加批注的文本内容"), wxT("提示"), wxICON_INFORMATION);
-        return;
-    }
-    
-    // 获取选中文本内容
-    wxString selectedText = m_transcriptionTextCtrl->GetRange(selStart, selEnd);
-    
-    // 创建批注对话框
-    MeetAnt::NoteDialog dlg(this, wxT("添加批注"), wxEmptyString, selectedText);
-    
-    if (dlg.ShowModal() == wxID_OK) {
-        // 获取批注标题和内容
-        wxString title = dlg.GetNoteTitle();
-        wxString content = dlg.GetNoteContent();
-        
-        // 查找选中文本所在位置的时间戳
-        wxString textBefore = m_transcriptionTextCtrl->GetRange(0, selStart);
-        wxRegEx timeRegex(wxT("\\[(\\d{2}):(\\d{2}):(\\d{2})\\]"));
-        wxString timeString;
-        
-        if (timeRegex.Matches(textBefore)) {
-            timeString = timeRegex.GetMatch(textBefore);
-        } else {
-            // 如果找不到时间戳，使用当前时间作为时间戳
-            wxDateTime now = wxDateTime::Now();
-            timeString = now.Format(wxT("[%H:%M:%S]"));
-        }
-        
-        // 解析时间戳
-        long hours, minutes, seconds;
-        wxString hoursStr = timeString.Mid(1, 2);
-        wxString minutesStr = timeString.Mid(4, 2);
-        wxString secondsStr = timeString.Mid(7, 2);
-        
-        hoursStr.ToLong(&hours);
-        minutesStr.ToLong(&minutes);
-        secondsStr.ToLong(&seconds);
-        
-        MeetAnt::TimeStamp timestamp = hours * 3600000 + minutes * 60000 + seconds * 1000;
-        
-        // 创建批注
-        CreateNote(title, content, timestamp);
-        
-        // 在编辑器中为选中文本应用样式（如加下划线或特殊颜色）
-        wxRichTextRange range(selStart, selEnd);
-        m_transcriptionTextCtrl->SetSelectionRange(range);
-        
-        wxRichTextAttr attr;
-        attr.SetTextColour(wxColour(0, 128, 0)); // 绿色
-        attr.SetFontUnderlined(true);
-        
-        m_transcriptionTextCtrl->SetStyle(range, attr);
-        
-        // 更新批注区域显示
-        RefreshAnnotations();
-        
-        // 如果批注面板未显示，则显示批注面板
-        if (!m_showAnnotations) {
-            ToggleAnnotationsDisplay();
-        }
-    }
-}
-
-void MainFrame::OnClearFormatting(wxCommandEvent& event) {
-    // 获取选中文本
-    wxRichTextRange range = m_transcriptionTextCtrl->GetSelectionRange();
-    if (range.GetStart() == range.GetEnd()) {
-        // If no selection, maybe clear formatting for the whole document or do nothing
-        // For now, require selection
-        wxMessageBox(wxT("请先选择要清除格式的文本"), wxT("提示"), wxICON_INFORMATION, this);
-        return;
-    }
-    
-    // 清除格式
-    m_transcriptionTextCtrl->BeginBatchUndo(wxT("清除格式"));
-    
-    wxRichTextAttr attr;
-    // Reset to default style
-    attr.SetTextColour(*wxBLACK); 
-    attr.SetBackgroundColour(*wxWHITE); 
-    attr.SetFontWeight(wxFONTWEIGHT_NORMAL);
-    attr.SetFontStyle(wxFONTSTYLE_NORMAL);
-    attr.SetFontUnderlined(false);
-    // Potentially reset font face and size if they are also considered "formatting"
-    // attr.SetFontFaceName(m_transcriptionTextCtrl->GetFont().GetFaceName());
-    // attr.SetFontSize(m_transcriptionTextCtrl->GetFont().GetPointSize());
-
-    m_transcriptionTextCtrl->SetStyle(range, attr);
-    m_transcriptionTextCtrl->EndBatchUndo();
-}
-
-void MainFrame::ProcessAudioChunk(const float* buffer, size_t bufferSize) {
-    if (!m_isFunASRInitialized && !InitializeFunASR()) {
-        wxLogError(wxT("无法处理音频，FunASR未初始化"));
-        return;
-    }
-    
-    // 在实际实现中，这里应该将音频数据发送到FunASR进行处理
-    // 本地模式：示例：funasr_process_audio(m_asrHandle, buffer, bufferSize, ...);
-    // 云端模式：这里应该向服务器发送音频数据
-    
-    // 由于是模拟，每隔一段时间生成一个虚拟识别结果
-    static int frameCount = 0;
-    frameCount++;
-    
-    // 每30帧（假设约1秒）生成一个识别结果
-    if (frameCount % 30 == 0) {
-        wxDateTime now = wxDateTime::Now();
-        wxString simulatedResult = wxString::Format(wxT("这是在%s模拟的识别结果 %d"), 
-                                                  m_isLocalMode ? wxT("本地") : wxT("云端"), 
-                                                  frameCount / 30);
-        
-        // 模拟非最终和最终结果
-        bool isFinal = (frameCount % 90 == 0); // 每3个结果一个最终结果
-        
-        // 在UI线程中处理结果
-        wxCommandEvent resultEvent(wxEVT_COMMAND_TEXT_UPDATED, ID_ASRResult);
-        resultEvent.SetString(simulatedResult);
-        resultEvent.SetInt(isFinal ? 1 : 0);
-        GetEventHandler()->AddPendingEvent(resultEvent);
-    }
-}
-
-void MainFrame::HandleRecognitionResult(const wxString& text, bool isFinal) {
-    // 这个方法应该在UI线程中处理识别结果
-    
-    if (!isFinal) {
-        // 非最终结果，可以显示为临时文本
-        SetStatusText(wxString::Format(wxT("正在识别: %s"), text));
-    } else {
-        // 最终结果，添加到转录
-        wxRichTextAttr timeAttr;
-        timeAttr.SetTextColour(wxColour(100, 100, 100));
-        timeAttr.SetFontWeight(wxFONTWEIGHT_BOLD);
-        
-        wxDateTime now = wxDateTime::Now();
-        
-        // 添加时间戳
-        m_transcriptionTextCtrl->BeginStyle(timeAttr);
-        m_transcriptionTextCtrl->AppendText(wxString::Format(wxT("[%s] "), now.FormatTime()));
-        m_transcriptionTextCtrl->EndStyle();
-        
-        // 添加识别文本
-        m_transcriptionTextCtrl->AppendText(text + wxT("\n"));
-        
-        SetStatusText(wxString::Format(wxT("识别文本: %s"), text.Left(30)));
-        
-        // 自动保存会话
-        if (!m_currentSessionPath.IsEmpty()) {
-            SaveCurrentSession();
-        }
-    }
-}
-
-// --- 新增方法: 填充批注树 ---
-void MainFrame::PopulateAnnotationTree() {
-    if (!m_annotationManager || m_currentSessionId.IsEmpty() || !m_annotationTree) {
-        return;
-    }
-    
-    m_annotationTree->DeleteAllItems();
-    wxTreeItemId rootId = m_annotationTree->AddRoot(wxT("批注列表"));
-    
-    // 获取当前会话的所有批注
-    std::vector<MeetAnt::Annotation*> annotations = m_annotationManager->GetSessionAnnotations(m_currentSessionId);
-    
-    // 添加批注到树
-    for (auto* annotation : annotations) {
-        wxString label;
-        
-        MeetAnt::TimeStamp ts = annotation->GetTimestamp();
-        wxString timeStr = wxString::Format(wxT("[%02d:%02d:%02d]"), 
-                                           ts / 3600000, 
-                                           (ts % 3600000) / 60000, 
-                                           (ts % 60000) / 1000);
-        
-        switch (annotation->GetType()) {
-            case MeetAnt::AnnotationType::Note:
-            {
-                auto* note = static_cast<MeetAnt::NoteAnnotation*>(annotation);
-                label = wxString::Format(wxT("批注: %s - %s"), timeStr, note->GetTitle());
-                break;
-            }
-            case MeetAnt::AnnotationType::Bookmark:
-            {
-                auto* bookmark = static_cast<MeetAnt::BookmarkAnnotation*>(annotation);
-                label = wxString::Format(wxT("书签: %s - %s"), timeStr, bookmark->GetLabel());
-                break;
-            }
-            case MeetAnt::AnnotationType::Highlight:
-            {
-                label = wxString::Format(wxT("高亮: %s"), timeStr);
-                break;
-            }
-            default:
-                label = wxString::Format(wxT("未知: %s"), timeStr);
-                break;
-        }
-        
-        wxTreeItemId item = m_annotationTree->AppendItem(rootId, label);
-        m_annotationTree->SetItemData(item, new AnnotationTreeItemData(ts, annotation->GetType(), annotation));
-    }
-    
-    m_annotationTree->ExpandAll();
-    
-    // 更新批注显示区域
-    RefreshAnnotations();
-}
-
-// --- 新增事件处理: 批注树选择 ---
-void MainFrame::OnAnnotationSelected(wxTreeEvent& event) {
-    wxTreeItemId itemId = event.GetItem();
-    if (!itemId.IsOk() || !m_annotationTree->GetItemData(itemId)) {
-        return; // 不是有效的数据项
-    }
-
-    AnnotationTreeItemData* itemData = dynamic_cast<AnnotationTreeItemData*>(m_annotationTree->GetItemData(itemId));
-    if (itemData && itemData->annotationPtr) {
-        // 跳转到时间戳
-        JumpToTimestamp(itemData->timestamp);
-
-        // 可以在此处理高亮、显示NotePopup等逻辑
-        if (itemData->type == MeetAnt::AnnotationType::Note) {
-            MeetAnt::NoteAnnotation* note = static_cast<MeetAnt::NoteAnnotation*>(itemData->annotationPtr);
-            // 检查是否已经有弹窗显示这个批注
-            bool popupExists = false;
-            for (NotePopup* popup : m_activeNotePopups) {
-                if (popup->GetNote() == note) {
-                    popupExists = true;
-                    popup->Show(true);
-                    popup->Raise(); //  Raise it to the top
-                    break;
-                }
-            }
-            if (!popupExists) {
-                 ShowNotePopup(note);
-            }
-        } else if (itemData->type == MeetAnt::AnnotationType::Highlight) {
-            // TODO: 主编辑器高亮对应文本（如果高亮信息包含文本范围）
-        }
-    } else if (itemData) {
-        // It's a category root (like "书签", "批注")
-        // No specific action needed, or could toggle expand/collapse for its children as an alternative
-    }
-}
-
-void MainFrame::OnExit(wxCommandEvent& event)
-{
-    // TODO: Implement exit logic, e.g., prompt to save unsaved changes
-    Close(true); // Close the frame
-}
-
-void MainFrame::OnAbout(wxCommandEvent& event)
-{
-    wxMessageBox(wxT("MeetAnt 会议助手\n版本 1.0.0\n一个简单的会议记录和转录工具。"),
-                 wxT("关于 MeetAnt"), wxOK | wxICON_INFORMATION, this);
-}
-
-void MainFrame::OnRecordToggle(wxCommandEvent& event)
-{
-    if (!m_isRecording) {
-        // 开始录制前重新加载配置
-        LoadAudioConfig();
-        
-        // 重置音频初始化状态，强制重新初始化
-        m_isAudioInitialized = false;
-        if (m_paStream) {
-            Pa_CloseStream(m_paStream);
-            m_paStream = nullptr;
-        }
-        
-        // 开始录制
-        if (InitializeAudioInput()) {
-            StartAudioCapture();
-            StartAudioRecording(); // 开始音频保存
-            m_isRecording = true;
-            m_recordButton->SetLabel(wxT("正在录制..."));
-            m_recordButton->SetBackgroundColour(*wxRED);
-            SetStatusText(wxString::Format(wxT("录制开始... (系统音频: %s)"), 
-                                         m_systemAudioMode ? wxT("启用") : wxT("禁用")));
-        } else {
-            wxMessageBox(wxT("无法初始化音频输入设备，请检查音频配置。"), 
-                        wxT("录制失败"), wxOK | wxICON_ERROR, this);
-            SetStatusText(wxT("录制初始化失败"));
-        }
-    } else {
-        // 停止录制
-        StopAudioCapture();
-        StopAudioRecording(); // 停止音频保存
-        m_isRecording = false;
-        m_recordButton->SetLabel(wxT("开始录制"));
-        m_recordButton->SetBackgroundColour(wxNullColour);
-        SetStatusText(wxT("录制停止"));
-        
-        // 保存当前会话
-        SaveCurrentSession();
-    }
-    m_recordButton->Refresh();
-    UpdateTaskBarIconState();
-}
-
-void MainFrame::OnAISend(wxCommandEvent& event)
-{
-    wxString userInput = m_aiUserInputCtrl->GetValue();
-    if (userInput.IsEmpty()) {
-        return;
-    }
-    
-    // 添加测试功能
-    if (userInput.Lower() == wxT("test")) {
-        userInput = wxT("请回复'测试成功'");
-        wxLogInfo(wxT("使用测试消息"));
-    }
-    
-    m_aiChatHistoryCtrl->AppendText(wxString::Format(wxT("用户: %s\n"), userInput));
-    m_aiUserInputCtrl->Clear();
-
-    // Send the user input to the AI
-    SendAIRequest(userInput);
-}
-
-void MainFrame::OnShowConfigDialog(wxCommandEvent& event)
-{
-    ConfigDialog dlg(this, wxID_ANY, wxT("MeetAnt 设置"));
-    // dlg.LoadSettings(); // Hypothetical method to load current settings into dialog
-    if (dlg.ShowModal() == wxID_OK) {
         // dlg.ApplySettings(); // Hypothetical method to apply settings from dialog
         SetStatusText(wxT("设置已更新 (模拟)"));
         
@@ -1557,14 +1263,14 @@ void MainFrame::OnSessionSelected(wxTreeEvent& event) {
             if (m_annotationManager) {
                 // 加载和显示批注
                 m_annotationManager->LoadAnnotations(m_currentSessionPath);
-                PopulateAnnotationTree();
+                // PopulateAnnotationTree();
                 LoadBookmarks();
                 RefreshAnnotations();
             } else {
                 // 初始化批注管理器
                 InitAnnotationManager();
                 m_annotationManager->LoadAnnotations(m_currentSessionPath);
-                PopulateAnnotationTree();
+                // PopulateAnnotationTree();
                 LoadBookmarks();
             }
             
@@ -1603,7 +1309,7 @@ void MainFrame::OnSessionSelected(wxTreeEvent& event) {
             // 尝试加载批注，但如果失败也不显示错误给用户
             try {
                 m_annotationManager->LoadAnnotations(m_currentSessionPath);
-                PopulateAnnotationTree();
+                // PopulateAnnotationTree();
                 LoadBookmarks();
             } catch (const std::exception& e) {
                 wxLogWarning(wxT("加载批注时发生异常: %s - %s"), m_currentSessionPath, wxString(e.what()));
@@ -1688,7 +1394,7 @@ void MainFrame::OnCreateSession(wxCommandEvent& event) {
     // 清空并刷新批注
     m_annotationManager->ClearAnnotations();
     LoadBookmarks();
-    PopulateAnnotationTree();
+    // PopulateAnnotationTree();
     RefreshAnnotations();
     
     SetStatusText(wxString::Format(wxT("已创建新会话: %s"), sessionName));
@@ -1733,16 +1439,22 @@ void MainFrame::OnSearch(wxCommandEvent& event) {
         return;
     }
     
-    // TODO: 实现搜索逻辑
+    // 使用新控件的搜索功能
     bool useRegex = m_useRegexCheckBox->GetValue();
     wxString speaker = m_speakerFilterComboBox->GetValue();
     
-    SetStatusText(wxString::Format(wxT("搜索: %s (正则: %s, 发言人: %s)"), 
-                                  searchQuery, 
-                                  useRegex ? wxT("是") : wxT("否"), 
-                                  speaker));
+    // 执行搜索
+    std::vector<int> results = m_transcriptionBubbleCtrl->SearchText(searchQuery, false);
     
-    // 实际应用中应该执行搜索并显示结果
+    if (!results.empty()) {
+        // 滚动到第一个结果
+        m_transcriptionBubbleCtrl->ScrollToMessage(results[0]);
+        m_transcriptionBubbleCtrl->HighlightMessage(results[0], true);
+        
+        SetStatusText(wxString::Format(wxT("找到 %zu 个匹配项"), results.size()));
+    } else {
+        SetStatusText(wxT("未找到匹配项"));
+    }
 }
 
 void MainFrame::OnSearchCancel(wxCommandEvent& event) {
@@ -1762,15 +1474,13 @@ void MainFrame::OnLabelSpeaker(wxCommandEvent& event) {
         return; // 用户取消
     }
     
-    // TODO: 在转录中标记发言人的逻辑
-    // 示例实现：在当前位置插入发言人标记
-    wxRichTextAttr speakerAttr;
-    speakerAttr.SetTextColour(wxColour(0, 0, 150));
-    speakerAttr.SetFontWeight(wxFONTWEIGHT_BOLD);
-    
-    m_transcriptionTextCtrl->BeginStyle(speakerAttr);
-    m_transcriptionTextCtrl->WriteText(wxString::Format(wxT("[%s] "), speakerName));
-    m_transcriptionTextCtrl->EndStyle();
+    // 如果有选中的消息，更新其发言人
+    if (m_selectedTranscriptionMessageId > 0) {
+        // 这里需要在TranscriptionBubbleCtrl中添加更新发言人的方法
+        // 暂时使用颜色设置来标识不同发言人
+        m_transcriptionBubbleCtrl->SetSpeakerColor(speakerName, 
+            wxColour(rand() % 256, rand() % 256, rand() % 256));
+    }
     
     // 更新发言人过滤下拉框
     if (m_speakerFilterComboBox->FindString(speakerName) == wxNOT_FOUND) {
@@ -1821,13 +1531,12 @@ void MainFrame::OnExportText(wxCommandEvent& event) {
         return;
     }
     
-    // TODO: 实际导出文本的逻辑
+    // 使用新控件的导出功能
     wxString path = saveFileDialog.GetPath();
     
-    // 示例实现：简单地保存编辑器内容
     wxFile file(path, wxFile::write);
     if (file.IsOpened()) {
-        wxString content = m_transcriptionTextCtrl->GetValue();
+        wxString content = m_transcriptionBubbleCtrl->ExportAsText();
         size_t bytesToWrite = content.Length();
         size_t bytesWritten = file.Write(content);
         file.Close();
@@ -2070,7 +1779,7 @@ void MainFrame::OnRemoveSession(wxCommandEvent& event) {
         RefreshSessionTree();
         
         // 清空编辑区和批注
-        m_transcriptionTextCtrl->Clear();
+        m_transcriptionBubbleCtrl->Clear();
         if (m_annotationManager) {
             m_annotationManager->ClearAnnotations();
         }
@@ -2327,7 +2036,7 @@ void MainFrame::ToggleAnnotationsDisplay() {
 // 实现同步批注滚动位置函数
 void MainFrame::SyncAnnotationScrollPosition(wxScrollWinEvent& event) {
     // 获取主编辑器的滚动位置
-    int pos = m_transcriptionTextCtrl->GetScrollPos(wxVERTICAL);
+    int pos = m_transcriptionBubbleCtrl->GetScrollPos(wxVERTICAL);
     
     // 设置批注面板的滚动位置
     if (m_annotationTextCtrl) {
@@ -2438,7 +2147,7 @@ void MainFrame::SaveCurrentSession() {
     }
     
     // 保存转录文本
-    wxString textContent = m_transcriptionTextCtrl->GetValue();
+    wxString textContent = m_transcriptionBubbleCtrl->ExportAsText();
     wxString textFilePath = wxFileName(m_currentSessionPath, wxT("transcript.txt")).GetFullPath();
     
     wxFile textFile;
@@ -4830,5 +4539,292 @@ void MainFrame::ProcessSSEMessage(const wxString& message) {
         
     } catch (const nlohmann::json::exception& e) {
         wxLogDebug(wxT("解析 SSE JSON 消息失败: %s"), wxString::FromUTF8(e.what()));
+    }
+}
+
+// 新增：处理转录消息点击事件
+void MainFrame::OnTranscriptionMessageClicked(wxCommandEvent& event) {
+    m_selectedTranscriptionMessageId = event.GetInt();
+    SetStatusText(wxString::Format(wxT("选中消息 ID: %d"), m_selectedTranscriptionMessageId));
+}
+
+// 新增：处理转录消息右键点击事件
+void MainFrame::OnTranscriptionMessageRightClicked(wxCommandEvent& event) {
+    m_selectedTranscriptionMessageId = event.GetInt();
+    wxMouseEvent* mouseEvent = static_cast<wxMouseEvent*>(event.GetClientData());
+    
+    // 创建右键菜单
+    wxMenu contextMenu;
+    contextMenu.Append(ID_Context_AddNote, wxT("添加批注"));
+    contextMenu.Append(ID_Context_Highlight, wxT("高亮"));
+    contextMenu.Append(ID_Context_SetSpeaker, wxT("设置发言人"));
+    contextMenu.AppendSeparator();
+    contextMenu.Append(ID_Context_Copy, wxT("复制文本"));
+    
+    // 显示菜单
+    PopupMenu(&contextMenu);
+}
+
+
+void MainFrame::OnAISend(wxCommandEvent& event)
+{
+    wxString userInput = m_aiUserInputCtrl->GetValue();
+    if (userInput.IsEmpty()) {
+        return;
+    }
+    
+    // 添加测试功能
+    if (userInput.Lower() == wxT("test")) {
+        userInput = wxT("请回复'测试成功'");
+        wxLogInfo(wxT("使用测试消息"));
+    }
+    
+    m_aiChatHistoryCtrl->AppendText(wxString::Format(wxT("用户: %s\n"), userInput));
+    m_aiUserInputCtrl->Clear();
+
+    // Send the user input to the AI
+    SendAIRequest(userInput);
+}
+
+
+void MainFrame::OnRecordToggle(wxCommandEvent& event)
+{
+    if (!m_isRecording) {
+        // 开始录制前重新加载配置
+        LoadAudioConfig();
+        
+        // 重置音频初始化状态，强制重新初始化
+        m_isAudioInitialized = false;
+        if (m_paStream) {
+            Pa_CloseStream(m_paStream);
+            m_paStream = nullptr;
+        }
+        
+        // 开始录制
+        if (InitializeAudioInput()) {
+            StartAudioCapture();
+            StartAudioRecording(); // 开始音频保存
+            m_isRecording = true;
+            m_recordingStartTime = wxDateTime::Now();  // 记录录音开始时间
+            m_recordButton->SetLabel(wxT("正在录制..."));
+            m_recordButton->SetBackgroundColour(*wxRED);
+            SetStatusText(wxString::Format(wxT("录制开始... (系统音频: %s)"), 
+                                         m_systemAudioMode ? wxT("启用") : wxT("禁用")));
+        } else {
+            wxMessageBox(wxT("无法初始化音频输入设备，请检查音频配置。"), 
+                        wxT("录制失败"), wxOK | wxICON_ERROR, this);
+            SetStatusText(wxT("录制初始化失败"));
+        }
+    } else {
+        // 停止录制
+        StopAudioCapture();
+        StopAudioRecording(); // 停止音频保存
+        m_isRecording = false;
+        m_recordButton->SetLabel(wxT("开始录制"));
+        m_recordButton->SetBackgroundColour(wxNullColour);
+        SetStatusText(wxT("录制停止"));
+        
+        // 保存当前会话
+        SaveCurrentSession();
+    }
+    m_recordButton->Refresh();
+    UpdateTaskBarIconState();
+}
+
+void MainFrame::OnShowConfigDialog(wxCommandEvent& event)
+{
+    ConfigDialog dlg(this, wxID_ANY, wxT("MeetAnt 设置"));
+    // dlg.LoadSettings(); // Hypothetical method to load current settings into dialog
+    if (dlg.ShowModal() == wxID_OK) {
+        // dlg.ApplySettings(); // Hypothetical method to apply settings from dialog
+        SetStatusText(wxT("设置已更新 (模拟)"));
+        
+        // Reload AI configuration
+        LoadAIConfig();
+    } else {
+        SetStatusText(wxT("设置未更改"));
+    }
+}
+void MainFrame::OnAbout(wxCommandEvent& event)
+{
+    wxMessageBox(wxT("MeetAnt 会议助手\n版本 1.0.0\n一个简单的会议记录和转录工具。"),
+                 wxT("关于 MeetAnt"), wxOK | wxICON_INFORMATION, this);
+}
+void MainFrame::OnExit(wxCommandEvent& event)
+{
+    // TODO: Implement exit logic, e.g., prompt to save unsaved changes
+    Close(true); // Close the frame
+}
+void MainFrame::ProcessAudioChunk(const float* buffer, size_t bufferSize) {
+    if (!m_isFunASRInitialized && !InitializeFunASR()) {
+        wxLogError(wxT("无法处理音频，FunASR未初始化"));
+        return;
+    }
+    
+    // 在实际实现中，这里应该将音频数据发送到FunASR进行处理
+    // 本地模式：示例：funasr_process_audio(m_asrHandle, buffer, bufferSize, ...);
+    // 云端模式：这里应该向服务器发送音频数据
+    
+    // 由于是模拟，每隔一段时间生成一个虚拟识别结果
+    static int frameCount = 0;
+    frameCount++;
+    
+    // 每30帧（假设约1秒）生成一个识别结果
+    if (frameCount % 30 == 0) {
+        wxDateTime now = wxDateTime::Now();
+        wxString simulatedResult = wxString::Format(wxT("这是在%s模拟的识别结果 %d"), 
+                                                  m_isLocalMode ? wxT("本地") : wxT("云端"), 
+                                                  frameCount / 30);
+        
+        // 模拟非最终和最终结果
+        bool isFinal = (frameCount % 90 == 0); // 每3个结果一个最终结果
+        
+        // 在UI线程中处理结果
+        wxCommandEvent resultEvent(wxEVT_COMMAND_TEXT_UPDATED, ID_ASRResult);
+        resultEvent.SetString(simulatedResult);
+        resultEvent.SetInt(isFinal ? 1 : 0);
+        GetEventHandler()->AddPendingEvent(resultEvent);
+    }
+}
+void MainFrame::HandleRecognitionResult(const wxString& text, bool isFinal) {
+    // 这个方法应该在UI线程中处理识别结果
+    
+    if (!isFinal) {
+        // 非最终结果，可以显示为临时文本
+        SetStatusText(wxString::Format(wxT("正在识别: %s"), text));
+    } else {
+        // 最终结果，添加到转录
+        wxRichTextAttr timeAttr;
+        timeAttr.SetTextColour(wxColour(100, 100, 100));
+        timeAttr.SetFontWeight(wxFONTWEIGHT_BOLD);
+        
+        wxDateTime now = wxDateTime::Now();
+        
+        // 添加时间戳
+        // m_transcriptionTextCtrl->BeginStyle(timeAttr);
+        // m_transcriptionTextCtrl->AppendText(wxString::Format(wxT("[%s] "), now.FormatTime()));
+        // m_transcriptionTextCtrl->EndStyle();
+        
+        // 添加识别文本
+        // m_transcriptionTextCtrl->AppendText(text + wxT("\n"));
+        
+        SetStatusText(wxString::Format(wxT("识别文本: %s"), text.Left(30)));
+        
+        // 自动保存会话
+        if (!m_currentSessionPath.IsEmpty()) {
+            SaveCurrentSession();
+        }
+    }
+}
+
+// 添加测试转录数据的方法
+void MainFrame::AddTestTranscriptionData() {
+    // 模拟一段会议对话
+    wxDateTime baseTime = wxDateTime::Now();
+    baseTime.Subtract(wxTimeSpan::Minutes(10)); // 从10分钟前开始
+    
+    // 记录开始时间
+    wxDateTime startTime = baseTime;
+    m_recordingStartTime = startTime;  // 设置录音开始时间
+    
+    // 添加一系列对话消息
+    m_transcriptionBubbleCtrl->AddMessage(wxT("张经理"), 
+        wxT("大家好，今天我们开始讨论新产品的发布计划。首先请李总介绍一下市场调研的情况。"), 
+        baseTime);
+    m_playbackControlBar->AddTimeMarker((baseTime - startTime).GetMilliseconds().ToLong(), wxT("张经理"));
+    
+    baseTime.Add(wxTimeSpan::Seconds(30));
+    m_transcriptionBubbleCtrl->AddMessage(wxT("李总"), 
+        wxT("谢谢张经理。根据我们最近的市场调研，目标用户群体主要集中在25-40岁的职场人士，他们对产品的便携性和易用性有较高要求。"), 
+        baseTime);
+    m_playbackControlBar->AddTimeMarker((baseTime - startTime).GetMilliseconds().ToLong(), wxT("李总"));
+    
+    baseTime.Add(wxTimeSpan::Seconds(45));
+    m_transcriptionBubbleCtrl->AddMessage(wxT("李总"), 
+        wxT("调研数据显示，有73%的受访者表示愿意为高质量的产品支付溢价，这给了我们很大的信心。"), 
+        baseTime);
+    
+    baseTime.Add(wxTimeSpan::Seconds(20));
+    m_transcriptionBubbleCtrl->AddMessage(wxT("王工"), 
+        wxT("从技术角度来说，我们的产品在性能上已经达到了行业领先水平。特别是在续航和稳定性方面，比竞品有明显优势。"), 
+        baseTime);
+    m_playbackControlBar->AddTimeMarker((baseTime - startTime).GetMilliseconds().ToLong(), wxT("王工"));
+    
+    baseTime.Add(wxTimeSpan::Seconds(35));
+    m_transcriptionBubbleCtrl->AddMessage(wxT("张经理"), 
+        wxT("很好。那么关于定价策略，财务部有什么建议吗？"), 
+        baseTime);
+    m_playbackControlBar->AddTimeMarker((baseTime - startTime).GetMilliseconds().ToLong(), wxT("张经理"));
+    
+    baseTime.Add(wxTimeSpan::Seconds(25));
+    m_transcriptionBubbleCtrl->AddMessage(wxT("赵会计"), 
+        wxT("根据成本核算和市场定位，我建议定价在2999-3499元之间。这样既能保证合理的利润率，又具有市场竞争力。"), 
+        baseTime);
+    m_playbackControlBar->AddTimeMarker((baseTime - startTime).GetMilliseconds().ToLong(), wxT("赵会计"));
+    
+    baseTime.Add(wxTimeSpan::Seconds(40));
+    m_transcriptionBubbleCtrl->AddMessage(wxT("刘经理"), 
+        wxT("营销方面，我们计划采用线上线下结合的方式。线上主要通过社交媒体和KOL合作，线下则在主要城市的商场设置体验店。"), 
+        baseTime);
+    m_playbackControlBar->AddTimeMarker((baseTime - startTime).GetMilliseconds().ToLong(), wxT("刘经理"));
+    
+    baseTime.Add(wxTimeSpan::Seconds(30));
+    m_transcriptionBubbleCtrl->AddMessage(wxT("张经理"), 
+        wxT("听起来计划很完善。大家还有什么需要补充的吗？"), 
+        baseTime);
+    
+    baseTime.Add(wxTimeSpan::Seconds(15));
+    m_transcriptionBubbleCtrl->AddMessage(wxT("李总"), 
+        wxT("我建议我们在正式发布前，先做一个小规模的测试发布，收集用户反馈。"), 
+        baseTime);
+    m_playbackControlBar->AddTimeMarker((baseTime - startTime).GetMilliseconds().ToLong(), wxT("李总"));
+    
+    baseTime.Add(wxTimeSpan::Seconds(20));
+    m_transcriptionBubbleCtrl->AddMessage(wxT("张经理"), 
+        wxT("好主意。那我们就按这个方向推进。下周三之前，各部门提交详细的执行计划。今天的会议就到这里，谢谢大家！"), 
+        baseTime);
+    
+    // 设置总时长
+    wxTimeSpan totalDuration = baseTime - startTime;
+    long totalDurationMs = totalDuration.GetMilliseconds().ToLong();
+    m_playbackControlBar->SetDuration(totalDurationMs);
+    
+    // 设置一些发言人的颜色
+    m_transcriptionBubbleCtrl->SetSpeakerColor(wxT("张经理"), wxColour(65, 105, 225));  // 皇家蓝
+    m_transcriptionBubbleCtrl->SetSpeakerColor(wxT("李总"), wxColour(220, 20, 60));     // 深红色
+    m_transcriptionBubbleCtrl->SetSpeakerColor(wxT("王工"), wxColour(34, 139, 34));     // 森林绿
+    m_transcriptionBubbleCtrl->SetSpeakerColor(wxT("赵会计"), wxColour(255, 140, 0));   // 深橙色
+    m_transcriptionBubbleCtrl->SetSpeakerColor(wxT("刘经理"), wxColour(138, 43, 226));  // 蓝紫色
+    
+    wxLogInfo(wxT("已添加测试转录数据"));
+}
+
+// 播放控制事件处理函数
+void MainFrame::OnPlaybackPositionChanged(wxCommandEvent& event) {
+    int positionMs = event.GetInt();
+    
+    // 根据播放位置滚动到对应的消息
+    const auto& messages = m_transcriptionBubbleCtrl->GetMessages();
+    for (const auto& msg : messages) {
+        // 假设消息的时间戳是从录音开始的毫秒数
+        long msgTimeMs = (msg.timestamp.GetTicks() - m_recordingStartTime.GetTicks()) * 1000;
+        
+        // 找到最接近当前播放位置的消息
+        if (msgTimeMs <= positionMs && msgTimeMs + 5000 > positionMs) { // 5秒窗口
+            m_transcriptionBubbleCtrl->ScrollToMessage(msg.messageId);
+            break;
+        }
+    }
+}
+
+void MainFrame::OnPlaybackStateChanged(wxCommandEvent& event) {
+    int state = event.GetInt();
+    
+    if (state == 1) { // 播放
+        SetStatusText(wxT("正在播放录音"));
+    } else if (state == 0) { // 暂停
+        SetStatusText(wxT("播放已暂停"));
+    } else if (state == -1) { // 停止
+        SetStatusText(wxT("播放已停止"));
     }
 }
